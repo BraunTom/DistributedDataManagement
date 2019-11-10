@@ -1,11 +1,24 @@
 package de.hpi.ddm.actors;
 
-import java.io.Serializable;
+import java.io.*;
+import java.net.URL;
+import java.util.HashMap;
+import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
-import akka.actor.AbstractLoggingActor;
-import akka.actor.ActorRef;
-import akka.actor.ActorSelection;
-import akka.actor.Props;
+import akka.NotUsed;
+import akka.actor.*;
+import akka.http.javadsl.ConnectHttp;
+import akka.http.javadsl.Http;
+import akka.http.javadsl.ServerBinding;
+import akka.http.javadsl.model.HttpRequest;
+import akka.http.javadsl.model.HttpResponse;
+import akka.http.javadsl.server.AllDirectives;
+import akka.http.javadsl.server.Route;
+import akka.stream.ActorMaterializer;
+import akka.stream.javadsl.Flow;
+import de.hpi.ddm.configuration.Configuration;
+import de.hpi.ddm.configuration.ConfigurationSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -17,7 +30,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	////////////////////////
 
 	public static final String DEFAULT_NAME = "largeMessageProxy";
-	
+
 	public static Props props() {
 		return Props.create(LargeMessageProxy.class);
 	}
@@ -34,30 +47,148 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class BytesMessage<T> implements Serializable {
+	public static class BytesMessage implements Serializable {
 		private static final long serialVersionUID = 4057807743872319842L;
-		private T bytes;
+		private String url;
 		private ActorRef sender;
 		private ActorRef receiver;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class BytesMessageDownloaded implements Serializable {
+		private static final long serialVersionUID = -2577152699714937534L;
+		private String url;
 	}
 	
 	/////////////////
 	// Actor State //
 	/////////////////
+
+	private LargeMessageHttpServer httpServer;
+
+	/////////////////
+	// HTTP server //
+	/////////////////
+
+	private static class LargeMessageHttpServer extends AllDirectives {
+		private final ActorSystem system;
+		private String httpHost;
+		private int httpPort;
+
+		private CompletionStage<ServerBinding> binding;
+		private HashMap<String, byte[]> files = new HashMap<>();
+
+		LargeMessageHttpServer(ActorSystem system) {
+			system.log().info("[HTTPServer] constructor system=" + system.hashCode());
+
+			this.system = system;
+
+			Configuration c = ConfigurationSingleton.get();
+			httpHost = c.getHost();
+			httpPort = c.getPort() + 1;
+
+			final Http http = Http.get(system);
+			final ActorMaterializer materializer = ActorMaterializer.create(system);
+
+			final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = createRoute().flow(system, materializer);
+			binding = http.bindAndHandle(routeFlow, ConnectHttp.toHost(httpHost, httpPort), materializer);
+
+			system.log().info("[HTTPServer] Server online at http://" + httpHost + ":" + httpPort + "/");
+		}
+
+		public void stop() {
+			system.log().info("[HTTPServer] stopping system=" + system.hashCode());
+			if (files.size() > 0)
+				system.log().warning("[HTTPServer] server still had " + files.size() + " unacknowledged files!");
+
+			binding.thenCompose(ServerBinding::unbind); // trigger unbinding from the port
+
+			system.log().info("[HTTPServer] Server offline at http://" + httpHost + ":" + httpPort + "/");
+		}
+
+		private Route createRoute() {
+			return this.get(() ->
+					files.entrySet().stream().map(fileEntry ->
+							path(fileEntry.getKey(), () -> get(
+									() -> complete(HttpResponse.create().withEntity(fileEntry.getValue()))
+							))
+					).reduce(reject(), Route::orElse)
+			);
+		}
+
+		String host(byte[] messageBytes) {
+			String uuid = UUID.randomUUID().toString();
+			system.log().info("[HTTPServer] Host " + uuid);
+			files.put(uuid, messageBytes);
+			return "http://" + httpHost + ":" + httpPort + "/" + uuid;
+		}
+
+		void unhost(String url) {
+			String uuid = url.substring(url.lastIndexOf("/") + 1);
+			system.log().info("[HTTPServer] Unhost " + uuid);
+			files.remove(uuid);
+		}
+	}
+
+	/////////////////////
+	// Utility methods //
+	/////////////////////
+
+	private static byte[] serialize(Object object) throws IOException {
+		try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+			 ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream)) {
+			objectOutputStream.writeObject(object);
+			return byteArrayOutputStream.toByteArray();
+		}
+	}
+
+	private static Object deserialize(byte[] bytes) throws IOException, ClassNotFoundException {
+		try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);
+			 ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream)) {
+			return objectInputStream.readObject();
+		}
+	}
+
+	private static byte[] download(String urlString) throws IOException {
+		URL url = new URL(urlString);
+
+		ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+
+		try (InputStream stream = url.openStream()) {
+			byte[] chunk = new byte[4096];
+			for (int bytesRead = stream.read(chunk); bytesRead > 0; bytesRead = stream.read(chunk)) {
+				byteArrayOutputStream.write(chunk, 0, bytesRead);
+			}
+		}
+
+		return byteArrayOutputStream.toByteArray();
+	}
 	
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
 
+	@Override
+	public void postStop() throws Exception, Exception {
+		super.postStop();
+
+		// If this actor needed to create a HTTP server, release it now
+		if (httpServer != null) {
+			httpServer.stop();
+			httpServer = null;
+		}
+	}
+
 	////////////////////
 	// Actor Behavior //
 	////////////////////
-	
+
 	@Override
 	public Receive createReceive() {
 		return receiveBuilder()
 				.match(LargeMessage.class, this::handle)
 				.match(BytesMessage.class, this::handle)
+				.match(BytesMessageDownloaded.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -72,11 +203,40 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// 2. Serialize the object and send its bytes via Akka streaming.
 		// 3. Send the object via Akka's http client-server component.
 		// 4. Other ideas ...
-		receiverProxy.tell(new BytesMessage<>(message.getMessage(), this.sender(), message.getReceiver()), this.self());
+		try {
+			httpServer = (httpServer == null) ? new LargeMessageHttpServer(context().system()) : httpServer;
+			byte[] messageBytes = serialize(message.getMessage());
+			String url = httpServer.host(messageBytes);
+			log().info("[LargeMessageProxy] Message of length " + messageBytes.length + " hosted at " + url);
+			receiverProxy.tell(new BytesMessage(url, this.sender(), message.getReceiver()), this.self());
+		} catch (Exception e) {
+			log().error(e, "[LargeMessageProxy] handle(LargeMessage)");
+		}
 	}
 
-	private void handle(BytesMessage<?> message) {
+	private void handle(BytesMessage message) {
 		// Reassemble the message content, deserialize it and/or load the content from some local location before forwarding its content.
-		message.getReceiver().tell(message.getBytes(), message.getSender());
+		try {
+			log().info("[LargeMessageProxy] Downloading message from " + message.getUrl());
+
+			byte[] bytes = download(message.getUrl());
+			sender().tell(new BytesMessageDownloaded(message.getUrl()), self());
+
+			log().info("[LargeMessageProxy] Downloading message of " + bytes.length);
+
+			Object o = deserialize(bytes);
+			log().info("[LargeMessageProxy] Message object " + o + " being delivered to " + message.getReceiver());
+
+			message.getReceiver().tell(o, message.getSender());
+		} catch (IOException | ClassNotFoundException e) {
+			log().error(e, "[LargeMessageProxy] handle(BytesMessage)");
+		}
+	}
+
+	private void handle(BytesMessageDownloaded message) {
+		log().info("[LargeMessageProxy] BytesMessageDownloaded with url=" + message.getUrl());
+		if (httpServer != null) {
+			httpServer.unhost(message.getUrl());
+		}
 	}
 }

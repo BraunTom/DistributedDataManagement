@@ -71,8 +71,9 @@ public class LargeMessageProxyTest {
 			{
 				ActorRef sender = system.actorOf(TestActor.props(this.getRef()), "sender");
 				ActorRef receiver = system.actorOf(TestActor.props(this.getRef()), "receiver");
-				
-				within(Duration.ofSeconds(1), () -> {
+
+				// NB: Increased tolerance to avoid flakiness on slow systems
+				within(Duration.ofSeconds(2), () -> {
 					// Test if a small message gets passed from one proxy to the other
 					String shortMessage = "Hello, this is a short message!";
 					LargeMessageProxy.LargeMessage<String> shortStringMessage = new LargeMessageProxy.LargeMessage<String>(shortMessage, receiver);
