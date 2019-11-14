@@ -19,6 +19,7 @@ import akka.stream.ActorMaterializer;
 import akka.stream.javadsl.Flow;
 import de.hpi.ddm.configuration.Configuration;
 import de.hpi.ddm.configuration.ConfigurationSingleton;
+import de.hpi.ddm.structures.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -134,21 +135,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Utility methods //
 	/////////////////////
 
-	private static byte[] serialize(Object object) throws IOException {
-		try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-			 ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream)) {
-			objectOutputStream.writeObject(object);
-			return byteArrayOutputStream.toByteArray();
-		}
-	}
-
-	private static Object deserialize(byte[] bytes) throws IOException, ClassNotFoundException {
-		try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);
-			 ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream)) {
-			return objectInputStream.readObject();
-		}
-	}
-
 	private static byte[] download(String urlString) throws IOException {
 		URL url = new URL(urlString);
 
@@ -205,7 +191,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// 4. Other ideas ...
 		try {
 			httpServer = (httpServer == null) ? new LargeMessageHttpServer(context().system()) : httpServer;
-			byte[] messageBytes = serialize(message.getMessage());
+			byte[] messageBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
 			String url = httpServer.host(messageBytes);
 			log().info("[LargeMessageProxy] Message of length " + messageBytes.length + " hosted at " + url);
 			receiverProxy.tell(new BytesMessage(url, this.sender(), message.getReceiver()), this.self());
@@ -224,11 +210,11 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
 			log().info("[LargeMessageProxy] Downloading message of " + bytes.length);
 
-			Object o = deserialize(bytes);
+			Object o = KryoPoolSingleton.get().fromBytes(bytes);
 			log().info("[LargeMessageProxy] Message object " + o + " being delivered to " + message.getReceiver());
 
 			message.getReceiver().tell(o, message.getSender());
-		} catch (IOException | ClassNotFoundException e) {
+		} catch (IOException e) {
 			log().error(e, "[LargeMessageProxy] handle(BytesMessage)");
 		}
 	}
