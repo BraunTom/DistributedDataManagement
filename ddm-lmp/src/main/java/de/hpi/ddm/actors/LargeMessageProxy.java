@@ -19,17 +19,16 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import net.jodah.expiringmap.ExpiringMap;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.Serializable;
-import java.net.URL;
 import java.util.LinkedList;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+
+import static akka.pattern.Patterns.pipe;
 
 public class LargeMessageProxy extends AbstractLoggingActor {
 
@@ -65,7 +64,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
 	// This message is sent by the parent of this actor to the sender LargeMessageProxy instance when it wishes
 	// to transfer a large message to its counterpart receiver.
-	@Data @NoArgsConstructor @AllArgsConstructor
+	@Data @AllArgsConstructor
 	public static class LargeMessage<T> {
 		private T message;
 		private ActorRef receiver;
@@ -81,16 +80,24 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		private ActorRef receiver;
 	}
 
+	@Data @AllArgsConstructor
+	public static class LargeMessageDownloaded {
+		private String url;
+		private byte[] responseBytes;
+		private ActorRef sender;
+		private ActorRef receiver;
+	}
+
 	// This message is sent from the receiver LargeMessageProxy instance to the sender LargeMessageProxy instance
 	// as an acknowledgement when a large message has been successfully sent and therefore can be deleted from the sender
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class LargeMessageDownloaded implements Serializable {
+	public static class LargeMessageDownloadAcknowledgement implements Serializable {
 		private static final long serialVersionUID = -2577152699714937534L;
 		private String url;
 	}
 
 	// This message is generated internally by the sender LargeMessageProxy instance when a large message has been
-	// available for download for a reasonable time, but no acknowledgement (LargeMessageDownloaded) has been received
+	// available for download for a reasonable time, but no acknowledgement (LargeMessageDownloadAcknowledgement) has been received
 	@Data @AllArgsConstructor
 	public static class LargeMessageDownloadExpired {
 		private String url;
@@ -99,6 +106,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	/////////////////
 	// Actor State //
 	/////////////////
+
+	private final ActorMaterializer materializer = ActorMaterializer.create(context().system());
 
 	// Instance of an HTTP server that is used to host and transfer the messages between the sender and receiver LargeMessageProxy.
 	private LargeMessageHttpServer httpServer;
@@ -136,7 +145,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// our actor's host()/unhost() calls
 		private ConcurrentHashMap<String, byte[]> routeToContent = new ConcurrentHashMap<>();
 
-		LargeMessageHttpServer(ActorSystem system) {
+		LargeMessageHttpServer(ActorSystem system, ActorMaterializer materializer) {
 			system.log().info("[HTTPServer] constructor system=" + system.hashCode());
 
 			this.system = system;
@@ -151,8 +160,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			httpPort = c.getPort() + 1;
 
 			final Http http = Http.get(system);
-			final ActorMaterializer materializer = ActorMaterializer.create(system);
-
 			final Flow<HttpRequest, HttpResponse, NotUsed> routeFlow = createRoute().flow(system, materializer);
 			httpServerBinding = http.bindAndHandle(routeFlow, ConnectHttp.toHost(httpHost, httpPort), materializer);
 
@@ -198,26 +205,6 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	}
 
 	/////////////////////
-	// Utility methods //
-	/////////////////////
-
-	// Downloads the content available URL and returns it as a raw array of bytes
-	private static byte[] download(String urlString) throws IOException {
-		URL url = new URL(urlString);
-
-		ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
-
-		try (InputStream stream = url.openStream()) {
-			byte[] chunk = new byte[4096];
-			for (int bytesRead = stream.read(chunk); bytesRead > 0; bytesRead = stream.read(chunk)) {
-				byteArrayOutputStream.write(chunk, 0, bytesRead);
-			}
-		}
-
-		return byteArrayOutputStream.toByteArray();
-	}
-	
-	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
 
@@ -243,6 +230,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				.match(LargeMessage.class, this::handle)
 				.match(LargeMessageAvailableForDownload.class, this::handle)
 				.match(LargeMessageDownloaded.class, this::handle)
+				.match(LargeMessageDownloadAcknowledgement.class, this::handle)
 				.match(LargeMessageDownloadExpired.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
@@ -266,7 +254,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				byte[] messageBytes = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
 
 				// Make the message available through HTTP
-				httpServer = (httpServer == null) ? new LargeMessageHttpServer(context().system()) : httpServer;
+				httpServer = (httpServer == null) ? new LargeMessageHttpServer(context().system(), materializer) : httpServer;
 				String url = httpServer.host(messageBytes);
 				log().info("[LargeMessageProxy] Message of length " + messageBytes.length + " hosted at " + url);
 
@@ -283,29 +271,36 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	}
 
 	private void handle(LargeMessageAvailableForDownload message) {
-		try {
-			log().info("[LargeMessageProxy] Downloading message from " + message.getUrl());
+		log().info("[LargeMessageProxy] Downloading message from " + message.getUrl());
 
-			// Download the content of the message
-			// TODO: This does blocking IO. If this is not acceptable, this should be made asynchronous
-			byte[] bytes = download(message.getUrl());
-			log().info("[LargeMessageProxy] Downloaded message with size=" + bytes.length);
+		// Download the content of the message using Akka's non-blocking IO
+		// https://doc.akka.io/docs/akka-http/current/client-side/request-level.html
+		// https://doc.akka.io/docs/akka-http/current/implications-of-streaming-http-entity.html
+		// Once it's done, transform the future to a message to ourselves along with the downloaded data as a byte array
+		final CompletionStage<LargeMessageDownloaded> messageDownloadedFuture = Http.get(context().system())
+				.singleRequest(HttpRequest.create(message.getUrl()))
+				.thenCompose(r -> r.entity().toStrict(LARGE_MESSAGE_TIMEOUT_SECONDS * 1000, materializer))
+				.thenCompose(e -> CompletableFuture.supplyAsync(() -> e.getData().toArray()))
+				.thenCompose(b -> CompletableFuture.supplyAsync(() -> new LargeMessageDownloaded(message.getUrl(), b, message.getSender(), message.getReceiver())));
 
-			// Acknowledge that the message has been received to the sender LargeMessageProxy instance
-			sender().tell(new LargeMessageDownloaded(message.getUrl()), self());
-
-			// Deserialization with Kryo
-			Object o = KryoPoolSingleton.get().fromBytes(bytes);
-			log().info("[LargeMessageProxy] Message object " + o + " being delivered to " + message.getReceiver());
-
-			// Finally, transfer the message to its final target
-			message.getReceiver().tell(o, message.getSender());
-		} catch (IOException e) {
-			log().error(e, "[LargeMessageProxy] handle(BytesMessage)");
-		}
+		pipe(messageDownloadedFuture, context().dispatcher()).to(self(), sender());
 	}
 
 	private void handle(LargeMessageDownloaded message) {
+		log().info("[LargeMessageProxy] Downloaded message with size=" + message.getResponseBytes().length + " from " + message.getUrl());
+
+		// Acknowledge that the message has been received to the sender LargeMessageProxy instance
+		sender().tell(new LargeMessageDownloadAcknowledgement(message.getUrl()), self());
+
+		// Deserialization with Kryo
+		Object o = KryoPoolSingleton.get().fromBytes(message.getResponseBytes());
+		log().info("[LargeMessageProxy] Message object " + o + " being delivered to " + message.getReceiver());
+
+		// Finally, transfer the message to its final target
+		message.getReceiver().tell(o, message.getSender());
+	}
+
+	private void handle(LargeMessageDownloadAcknowledgement message) {
 		log().info("[LargeMessageProxy] BytesMessageDownloaded with url=" + message.getUrl());
 
 		// Release the resources associated with the in-flight message
