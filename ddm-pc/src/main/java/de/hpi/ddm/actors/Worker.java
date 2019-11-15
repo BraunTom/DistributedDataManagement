@@ -1,9 +1,10 @@
 package de.hpi.ddm.actors;
 
-import java.io.UnsupportedEncodingException;
+import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.List;
+import java.util.*;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -16,6 +17,8 @@ import akka.cluster.ClusterEvent.MemberUp;
 import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -36,6 +39,11 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////
 	// Actor Messages //
 	////////////////////
+
+	@Data @NoArgsConstructor
+	public static class RequestWork implements Serializable {
+		private static final long serialVersionUID = 0;
+	}
 
 	/////////////////
 	// Actor State //
@@ -70,6 +78,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
+				.match(Master.WorkItem.class, this::handle)
+				.match(Master.CanStart.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -99,23 +109,90 @@ public class Worker extends AbstractLoggingActor {
 		if (this.masterSystem.equals(message.member()))
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
+
+	private char findUncommonCharacter(char[] allChars, char[] hints) throws Exception {
+		Set<Character> match = new HashSet<>();
+
+		for (char hint : hints) {
+			match.add(hint);
+		}
+
+		for (char cha : allChars) {
+			if (match.contains(cha)) {
+				return cha;
+			}
+		}
+
+		throw new Exception("WTF");
+	}
+
+	private void handle(Master.WorkItem workItem) throws Exception {
+		String[] line = workItem.getLine();
+		Set<Character> possibleCharacters = new HashSet<>();
+
+
+		for (String hint : workItem.hints()) {
+			possibleCharacters.add(this.findUncommonCharacter(workItem.possibleCharacters(),
+					this.findMatchingPermutation(workItem.possibleCharacters(), workItem.passwordLength(), hint)));
+		}
+
+		/*ArrayList<String> possiblePasswords = this.allKLength(possibleCharacters.toString().toCharArray(), passwordLength);
+
+		for (String possiblePassword : possiblePasswords) {
+			if (this.hash(possiblePassword).equals(line[4])) {
+				System.out.println(possiblePassword);
+				return;
+			}
+		}*/
+	}
+
+	private void handle(Master.CanStart canStart) {
+		sender().tell(new RequestWork(), self());
+	}
 	
 	private String hash(String line) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
-			byte[] hashedBytes = digest.digest(String.valueOf(line).getBytes("UTF-8"));
+			byte[] hashedBytes = digest.digest(String.valueOf(line).getBytes(StandardCharsets.UTF_8));
 			
-			StringBuffer stringBuffer = new StringBuffer();
-			for (int i = 0; i < hashedBytes.length; i++) {
-				stringBuffer.append(Integer.toString((hashedBytes[i] & 0xff) + 0x100, 16).substring(1));
+			StringBuilder stringBuffer = new StringBuilder();
+			for (byte hashedByte : hashedBytes) {
+				stringBuffer.append(Integer.toString((hashedByte & 0xff) + 0x100, 16).substring(1));
 			}
 			return stringBuffer.toString();
 		}
-		catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
+		catch (NoSuchAlgorithmException e) {
 			throw new RuntimeException(e.getMessage());
 		}
 	}
-	
+
+	//////////////////////////////
+	// helper from the internet //
+	//////////////////////////////
+
+	// https://www.geeksforgeeks.org/print-all-combinations-of-given-length/
+	// wrapper method for nicer access
+	private char[] findMatchingPermutation(char[] set, int k, String hash) {
+		int n = set.length;
+		return this.findMatchingPermutationRec(set, "", n, k, hash).toCharArray();
+	}
+
+	// recursively generates permutations of length k until one is found that matches hash
+	private String findMatchingPermutationRec(char[] set, String prefix, int n, int k, String hash) {
+		if (k == 0) {
+			return this.hash(prefix).equals(hash) ? prefix : null;
+		}
+
+		String result = null;
+
+		for (int i = 0; i < n && result == null; ++i) {
+			String newPrefix = prefix + set[i];
+			result = this.findMatchingPermutationRec(set, newPrefix, n, k - 1, hash);
+		}
+
+		return result;
+	}
+
 	// Generating all permutations of an array using Heap's Algorithm
 	// https://en.wikipedia.org/wiki/Heap's_algorithm
 	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/

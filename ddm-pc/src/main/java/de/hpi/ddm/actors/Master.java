@@ -1,9 +1,7 @@
 package de.hpi.ddm.actors;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -47,10 +45,34 @@ public class Master extends AbstractLoggingActor {
 		private List<String[]> lines;
 	}
 
-	@Data
+	@Data @NoArgsConstructor
 	public static class RegistrationMessage implements Serializable {
 		private static final long serialVersionUID = 3303081601659723997L;
 	}
+
+	@Data @NoArgsConstructor
+	public static class CanStart implements Serializable {
+		private static final long serialVersionUID = 0;
+	}
+
+	@Data @AllArgsConstructor @NoArgsConstructor
+	public static class WorkItem implements Serializable {
+		private static final long serialVersionUID = 0;
+		private String[] line;
+
+		public String[] hints() {
+			return Arrays.copyOfRange(this.line, 5, this.line.length);
+		}
+
+		public int passwordLength() {
+			return Integer.parseInt(this.line[3]);
+		}
+
+		public char[] possibleCharacters() {
+			return line[2].toCharArray();
+		}
+	}
+
 	
 	/////////////////
 	// Actor State //
@@ -59,6 +81,8 @@ public class Master extends AbstractLoggingActor {
 	private final ActorRef reader;
 	private final ActorRef collector;
 	private final List<ActorRef> workers;
+
+	private LinkedList<WorkItem> workItems = new LinkedList<>();
 
 	private long startTime;
 	
@@ -82,6 +106,7 @@ public class Master extends AbstractLoggingActor {
 				.match(BatchMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
+				.match(Worker.RequestWork.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -106,12 +131,17 @@ public class Master extends AbstractLoggingActor {
 			this.terminate();
 			return;
 		}
-		
-		for (String[] line : message.getLines())
-			System.out.println(Arrays.toString(line));
-		
-		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
-		this.reader.tell(new Reader.ReadMessage(), this.self());
+
+		for (String[] line : message.getLines()) {
+			this.workItems.add(new WorkItem(line));
+		}
+
+		// this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
+		// this.reader.tell(new Reader.ReadMessage(), this.self());
+	}
+
+	private void assignWork(ActorRef actorRef, WorkItem item) {
+		actorRef.tell(item, self());
 	}
 	
 	protected void terminate() {
@@ -129,9 +159,18 @@ public class Master extends AbstractLoggingActor {
 		this.log().info("Algorithm finished in {} ms", executionTime);
 	}
 
+	protected void handle(Worker.RequestWork request) {
+		if (this.workItems.size() > 0) {
+			this.sender().tell(this.workItems.removeFirst(), self());
+		}
+	}
+
 	protected void handle(RegistrationMessage message) {
 		this.context().watch(this.sender());
 		this.workers.add(this.sender());
+
+		this.sender().tell(new CanStart(), self());
+
 //		this.log().info("Registered {}", this.sender());
 	}
 	
