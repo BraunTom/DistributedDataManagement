@@ -9,6 +9,8 @@ import akka.actor.ActorRef;
 import akka.actor.PoisonPill;
 import akka.actor.Props;
 import akka.actor.Terminated;
+import de.hpi.ddm.structures.SHA256Hash;
+import de.hpi.ddm.structures.StudentRecord;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -43,7 +45,7 @@ public class Master extends AbstractLoggingActor {
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class BatchMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
-		private List<String[]> lines;
+		private List<StudentRecord> records;
 	}
 
 	@Data @NoArgsConstructor
@@ -53,25 +55,12 @@ public class Master extends AbstractLoggingActor {
 
 	@Data @NoArgsConstructor
 	public static class CanStart implements Serializable {
-		private static final long serialVersionUID = 0;
+		private static final long serialVersionUID = -1225459087439901018L;
 	}
 
 	@Data @AllArgsConstructor @NoArgsConstructor
 	public static class WorkItem implements Serializable {
-		private static final long serialVersionUID = 0;
-		private String[] line;
-
-		public String[] hints() {
-			return Arrays.copyOfRange(this.line, 5, this.line.length);
-		}
-
-		public int passwordLength() {
-			return Integer.parseInt(this.line[3]);
-		}
-
-		public byte[] possibleCharacters() {
-			return line[2].getBytes(StandardCharsets.UTF_8);
-		}
+		private StudentRecord record;
 	}
 
 	
@@ -127,13 +116,13 @@ public class Master extends AbstractLoggingActor {
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		
-		if (message.getLines().isEmpty()) {
+		if (message.getRecords().isEmpty()) {
 			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.terminate();
 			return;
 		}
 
-		for (String[] line : message.getLines()) {
+		for (StudentRecord line : message.getRecords()) {
 			this.workItems.add(new WorkItem(line));
 		}
 		tryAssignWork();

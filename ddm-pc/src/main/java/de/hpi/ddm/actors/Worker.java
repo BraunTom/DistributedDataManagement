@@ -1,11 +1,5 @@
 package de.hpi.ddm.actors;
 
-import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.*;
-
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.PoisonPill;
@@ -18,8 +12,19 @@ import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
 import de.hpi.ddm.structures.SHA256Hash;
+import de.hpi.ddm.structures.StudentRecord;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.Value;
+import org.apache.commons.lang3.ArrayUtils;
+
+import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -43,7 +48,13 @@ public class Worker extends AbstractLoggingActor {
 
 	@Data @NoArgsConstructor
 	public static class RequestWork implements Serializable {
-		private static final long serialVersionUID = 0;
+		private static final long serialVersionUID = -5534456615984629798L;
+	}
+
+	@Value @AllArgsConstructor
+	private static class CrackedHint {
+		String plainText;
+		char missingCharacter;
 	}
 
 	/////////////////
@@ -111,43 +122,44 @@ public class Worker extends AbstractLoggingActor {
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
 
-	private char findUncommonCharacter(char[] allChars, char[] hints) throws Exception {
+	private char[] findUncommonCharacters(String passwordCharacters, Character[] hintCharacters) throws Exception {
 		Set<Character> match = new HashSet<>();
-
-		for (char hint : hints) {
-			match.add(hint);
+		for (char c : passwordCharacters.toCharArray()) {
+			match.add(c);
 		}
-
-		for (char cha : allChars) {
-			if (match.contains(cha)) {
-				return cha;
-			}
+		for (char c : hintCharacters) {
+		    match.remove(c);
 		}
-
-		throw new Exception("WTF");
+		return ArrayUtils.toPrimitive(match.toArray(new Character[0]));
 	}
 
 	private void handle(Master.WorkItem workItem) throws Exception {
-		log().info("[Worker] Handling WorkItem");
+		StudentRecord record = workItem.getRecord();
 
-		HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack = new HashMap<>();
-		for (String hint : workItem.hints()) {
-			SHA256Hash hintHash = new SHA256Hash();
-			hintHash.fromHexString(hint);
+		log().info("[Worker rid={}] Received new WorkItem", record.getId());
 
-			hintsToCrack.put(hintHash, new AbstractMap.SimpleImmutableEntry<>("", '\0'));
+		// Crack the hint hashes
+		log().info("[Worker rid={}] Cracking hint hashes", record.getId());
+		HashMap<SHA256Hash, CrackedHint> hintsToCrack = new HashMap<>();
+		for (SHA256Hash hintHash : record.getHintHashes()) {
+			hintsToCrack.put(hintHash, null);
+		}
+		byte[] passwordCharsBytes = record.getPasswordChars().getBytes(StandardCharsets.UTF_8);
+		this.crackPasswordHints(passwordCharsBytes, hintsToCrack);
+
+		if (hintsToCrack.containsValue(null)) {
+			throw new RuntimeException("Some hint hash could not be cracked!");
 		}
 
-		log().info("[Worker] hintsToCrack: " + hintsToCrack.size() + " /// " + Arrays.toString(workItem.possibleCharacters()));
+		log().info("[Worker rid={}] All hint hashes cracked ({})", record.getId(),
+				Arrays.toString(hintsToCrack.values().stream().map(CrackedHint::getPlainText).toArray(String[]::new)));
 
-		this.crackPasswordHints(workItem.possibleCharacters(), hintsToCrack);
+		// Figure out the characters that can be in the password
+		char[] fullPasswordCharacters = findUncommonCharacters(record.getPasswordChars(),
+                hintsToCrack.values().stream().map(CrackedHint::getMissingCharacter).toArray(Character[]::new));
 
-		Set<Character> possibleCharacters = new HashSet<>();
-		for (Map.Entry<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> entry : hintsToCrack.entrySet()) {
-			possibleCharacters.add(entry.getValue().getValue());
-		}
-
-		log().info("[Worker] PossibleCharacters: " + Arrays.toString(possibleCharacters.toArray(new Character[0])));
+		log().info("[Worker rid={}] Possible characters for the full password are: ({})", record.getId(),
+			Arrays.toString(fullPasswordCharacters));
 
 		/*ArrayList<String> possiblePasswords = this.allKLength(possibleCharacters.toString().toCharArray(), passwordLength);
 
@@ -167,7 +179,9 @@ public class Worker extends AbstractLoggingActor {
 	// helper from the internet //
 	//////////////////////////////
 
-	// Same algorithm as hashcat-utils permute.c
+	// Generates a new permutation in place using the "Countdown QuickPerm Algorithm" developed by Phillip Paul Fuchs
+	// This is the algorithm used in hashcat-utils permute.c
+	// See: https://github.com/hashcat/hashcat-utils/blob/f2a86c76c7ce38ebfeb6ea4a16b5dacd6c942afe/src/permute.c
 	private static int getNextPermutation(byte[] word, int[] p, int k) {
 		p[k]--;
 
@@ -183,32 +197,29 @@ public class Worker extends AbstractLoggingActor {
 		return k;
 	}
 
-	private static void tryCrackPasswordHint(byte[] candidate, HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack) throws Exception {
-		SHA256Hash candidateHash = new SHA256Hash();
-		candidateHash.fromData(candidate, candidate.length - 1); // Ignore last character (not in hint, just used for the permutations!)
+	private static void tryCrackPasswordHint(byte[] candidate, Map<SHA256Hash, CrackedHint> hintsToCrack) throws Exception {
+		SHA256Hash candidateHash = SHA256Hash.fromDataHash(candidate, candidate.length - 1); // Ignore last character (not in hint, just used for the permutations!)
 
 		if (hintsToCrack.containsKey(candidateHash)) {
-			hintsToCrack.replace(candidateHash, new AbstractMap.SimpleImmutableEntry<>(
-					new String(candidate, 0, candidate.length - 1, StandardCharsets.US_ASCII),
+			hintsToCrack.replace(candidateHash, new CrackedHint(
+					new String(candidate, 0, candidate.length - 1, StandardCharsets.UTF_8),
 					(char) candidate[candidate.length - 1]
 			));
 		}
 	}
 
-	private void crackPasswordHints(byte[] passwordChars, HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack) throws Exception {
-		byte[] permutation = passwordChars.clone();
-
+	private void crackPasswordHints(byte[] passwordChars, Map<SHA256Hash, CrackedHint> hintsToCrack) throws Exception {
 		int[] p = new int[passwordChars.length + 1];
 		for (int k = 0; k < p.length; k++)
 			p[k] = k;
 
 		int k = 1;
-		tryCrackPasswordHint(permutation, hintsToCrack);
+		tryCrackPasswordHint(passwordChars, hintsToCrack);
 
-		while ((k = getNextPermutation(permutation, p, k)) != passwordChars.length) {
-			tryCrackPasswordHint(permutation, hintsToCrack);
+		while ((k = getNextPermutation(passwordChars, p, k)) != passwordChars.length) {
+			tryCrackPasswordHint(passwordChars, hintsToCrack);
 		}
 
-		tryCrackPasswordHint(permutation, hintsToCrack);
+		tryCrackPasswordHint(passwordChars, hintsToCrack);
 	}
 }

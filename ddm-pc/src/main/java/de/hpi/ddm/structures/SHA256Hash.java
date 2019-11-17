@@ -1,11 +1,12 @@
 package de.hpi.ddm.structures;
 
+import java.security.DigestException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
 public class SHA256Hash {
-    private final int SHA256_DIGEST_LENGTH = 32;
+    private static final int SHA256_DIGEST_LENGTH = 32;
     private byte[] bytes = new byte[SHA256_DIGEST_LENGTH];
 
     private static ThreadLocal<MessageDigest> sha256Hasher = ThreadLocal.withInitial(() -> {
@@ -33,22 +34,30 @@ public class SHA256Hash {
         return (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
     }
 
-    public void fromHexString(String hexString) throws Exception {
+    public static SHA256Hash fromHexString(String hexString) {
+        SHA256Hash hash = new SHA256Hash();
+
         if (hexString.length() != 2*SHA256_DIGEST_LENGTH)
-            throw new Exception("A SHA256 hex string should have " + 2*SHA256_DIGEST_LENGTH + " characters.");
+            throw new IllegalArgumentException("A SHA256 hex string should have " + 2*SHA256_DIGEST_LENGTH + " characters.");
 
         for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
             byte hiNibble =  hexCharToNibble(hexString.charAt(i*2));
             byte loNibble =  hexCharToNibble(hexString.charAt(i*2+1));
 
-            bytes[i] = (byte)((hiNibble << 4) | loNibble);
+            hash.bytes[i] = (byte)((hiNibble << 4) | loNibble);
         }
+
+        return hash;
     }
 
-    public void fromData(byte[] data, int length) throws Exception {
+    public static SHA256Hash fromDataHash(byte[] data, int length) throws DigestException {
+        SHA256Hash hash = new SHA256Hash();
+
         MessageDigest digest = sha256Hasher.get();
         digest.update(data, 0, length);
-        digest.digest(bytes, 0, SHA256_DIGEST_LENGTH);
+        digest.digest(hash.bytes, 0, SHA256_DIGEST_LENGTH);
+
+        return hash;
     }
 
     @Override
@@ -62,14 +71,14 @@ public class SHA256Hash {
         return hexStringBuilder.toString();
     }
 
-    private static byte hexCharToNibble(char c) throws Exception {
+    private static byte hexCharToNibble(char c) {
         if (c >= '0' && c <= '9')
             return (byte)(c - '0');
         if (c >= 'a' && c <= 'f')
             return (byte)((c - 'a') + 10);
         if (c >= 'A' && c <= 'F')
             return (byte)((c - 'A') + 10);
-        throw new Exception("Invalid character in SHA256 hex string");
+        throw new IllegalArgumentException("Invalid character in SHA256 hex string");
     }
 
     private static char nibbleToHexChar(byte nibble) {
