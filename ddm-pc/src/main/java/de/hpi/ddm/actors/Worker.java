@@ -17,6 +17,7 @@ import akka.cluster.ClusterEvent.MemberUp;
 import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
+import de.hpi.ddm.structures.SHA256Hash;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -127,14 +128,26 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(Master.WorkItem workItem) throws Exception {
-		String[] line = workItem.getLine();
-		Set<Character> possibleCharacters = new HashSet<>();
+		log().info("[Worker] Handling WorkItem");
 
-
+		HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack = new HashMap<>();
 		for (String hint : workItem.hints()) {
-			possibleCharacters.add(this.findUncommonCharacter(workItem.possibleCharacters(),
-					this.findMatchingPermutation(workItem.possibleCharacters(), workItem.passwordLength(), hint)));
+			SHA256Hash hintHash = new SHA256Hash();
+			hintHash.fromHexString(hint);
+
+			hintsToCrack.put(hintHash, new AbstractMap.SimpleImmutableEntry<>("", '\0'));
 		}
+
+		log().info("[Worker] hintsToCrack: " + hintsToCrack.size() + " /// " + Arrays.toString(workItem.possibleCharacters()));
+
+		this.crackPasswordHints(workItem.possibleCharacters(), hintsToCrack);
+
+		Set<Character> possibleCharacters = new HashSet<>();
+		for (Map.Entry<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> entry : hintsToCrack.entrySet()) {
+			possibleCharacters.add(entry.getValue().getValue());
+		}
+
+		log().info("[Worker] PossibleCharacters: " + Arrays.toString(possibleCharacters.toArray(new Character[0])));
 
 		/*ArrayList<String> possiblePasswords = this.allKLength(possibleCharacters.toString().toCharArray(), passwordLength);
 
@@ -149,74 +162,53 @@ public class Worker extends AbstractLoggingActor {
 	private void handle(Master.CanStart canStart) {
 		sender().tell(new RequestWork(), self());
 	}
-	
-	private String hash(String line) {
-		try {
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
-			byte[] hashedBytes = digest.digest(String.valueOf(line).getBytes(StandardCharsets.UTF_8));
-			
-			StringBuilder stringBuffer = new StringBuilder();
-			for (byte hashedByte : hashedBytes) {
-				stringBuffer.append(Integer.toString((hashedByte & 0xff) + 0x100, 16).substring(1));
-			}
-			return stringBuffer.toString();
-		}
-		catch (NoSuchAlgorithmException e) {
-			throw new RuntimeException(e.getMessage());
-		}
-	}
 
 	//////////////////////////////
 	// helper from the internet //
 	//////////////////////////////
 
-	// https://www.geeksforgeeks.org/print-all-combinations-of-given-length/
-	// wrapper method for nicer access
-	private char[] findMatchingPermutation(char[] set, int k, String hash) {
-		int n = set.length;
-		return this.findMatchingPermutationRec(set, "", n, k, hash).toCharArray();
+	// Same algorithm as hashcat-utils permute.c
+	private static int getNextPermutation(byte[] word, int[] p, int k) {
+		p[k]--;
+
+		int j = (k % 2) * p[k];
+
+		byte tmp = word[j];
+		word[j] = word[k];
+		word[k] = tmp;
+
+		for (k = 1; p[k] == 0; k++)
+			p[k] = k;
+
+		return k;
 	}
 
-	// recursively generates permutations of length k until one is found that matches hash
-	private String findMatchingPermutationRec(char[] set, String prefix, int n, int k, String hash) {
-		if (k == 0) {
-			return this.hash(prefix).equals(hash) ? prefix : null;
+	private static void tryCrackPasswordHint(byte[] candidate, HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack) throws Exception {
+		SHA256Hash candidateHash = new SHA256Hash();
+		candidateHash.fromData(candidate, candidate.length - 1); // Ignore last character (not in hint, just used for the permutations!)
+
+		if (hintsToCrack.containsKey(candidateHash)) {
+			hintsToCrack.replace(candidateHash, new AbstractMap.SimpleImmutableEntry<>(
+					new String(candidate, 0, candidate.length - 1, StandardCharsets.US_ASCII),
+					(char) candidate[candidate.length - 1]
+			));
 		}
-
-		String result = null;
-
-		for (int i = 0; i < n && result == null; ++i) {
-			String newPrefix = prefix + set[i];
-			result = this.findMatchingPermutationRec(set, newPrefix, n, k - 1, hash);
-		}
-
-		return result;
 	}
 
-	// Generating all permutations of an array using Heap's Algorithm
-	// https://en.wikipedia.org/wiki/Heap's_algorithm
-	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/
-	private void heapPermutation(char[] a, int size, int n, List<String> l) {
-		// If size is 1, store the obtained permutation
-		if (size == 1)
-			l.add(new String(a));
+	private void crackPasswordHints(byte[] passwordChars, HashMap<SHA256Hash, AbstractMap.SimpleImmutableEntry<String, Character>> hintsToCrack) throws Exception {
+		byte[] permutation = passwordChars.clone();
 
-		for (int i = 0; i < size; i++) {
-			heapPermutation(a, size - 1, n, l);
+		int[] p = new int[passwordChars.length + 1];
+		for (int k = 0; k < p.length; k++)
+			p[k] = k;
 
-			// If size is odd, swap first and last element
-			if (size % 2 == 1) {
-				char temp = a[0];
-				a[0] = a[size - 1];
-				a[size - 1] = temp;
-			}
+		int k = 1;
+		tryCrackPasswordHint(permutation, hintsToCrack);
 
-			// If size is even, swap i-th and last element
-			else {
-				char temp = a[i];
-				a[i] = a[size - 1];
-				a[size - 1] = temp;
-			}
+		while ((k = getNextPermutation(permutation, p, k)) != passwordChars.length) {
+			tryCrackPasswordHint(permutation, hintsToCrack);
 		}
+
+		tryCrackPasswordHint(permutation, hintsToCrack);
 	}
 }

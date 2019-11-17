@@ -1,6 +1,7 @@
 package de.hpi.ddm.actors;
 
 import java.io.Serializable;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 import akka.actor.AbstractLoggingActor;
@@ -68,8 +69,8 @@ public class Master extends AbstractLoggingActor {
 			return Integer.parseInt(this.line[3]);
 		}
 
-		public char[] possibleCharacters() {
-			return line[2].toCharArray();
+		public byte[] possibleCharacters() {
+			return line[2].getBytes(StandardCharsets.UTF_8);
 		}
 	}
 
@@ -118,7 +119,6 @@ public class Master extends AbstractLoggingActor {
 	}
 	
 	protected void handle(BatchMessage message) {
-		
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		// The input file is read in batches for two reasons: /////////////////////////////////////////////////
 		// 1. If we distribute the batches early, we might not need to hold the entire input data in memory. //
