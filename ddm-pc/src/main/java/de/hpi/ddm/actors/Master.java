@@ -84,6 +84,7 @@ public class Master extends AbstractLoggingActor {
 	private final List<ActorRef> workers;
 
 	private LinkedList<WorkItem> workItems = new LinkedList<>();
+	private LinkedList<ActorRef> idleWorkers = new LinkedList<>();
 
 	private long startTime;
 	
@@ -135,13 +136,16 @@ public class Master extends AbstractLoggingActor {
 		for (String[] line : message.getLines()) {
 			this.workItems.add(new WorkItem(line));
 		}
+		tryAssignWork();
 
 		// this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 		// this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
 
-	private void assignWork(ActorRef actorRef, WorkItem item) {
-		actorRef.tell(item, self());
+	private void tryAssignWork() {
+		while (!idleWorkers.isEmpty() && !workItems.isEmpty()) {
+			idleWorkers.remove().tell(this.workItems.removeFirst(), self());
+		}
 	}
 	
 	protected void terminate() {
@@ -160,9 +164,8 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.RequestWork request) {
-		if (this.workItems.size() > 0) {
-			this.sender().tell(this.workItems.removeFirst(), self());
-		}
+		idleWorkers.add(this.sender());
+		tryAssignWork();
 	}
 
 	protected void handle(RegistrationMessage message) {
