@@ -3,20 +3,20 @@ set -e
 
 N_SLAVES=2
 
-podman ps -a | grep -woP 'ddm-lmp-run.+' | xargs -r podman rm -f
+sudo docker ps -a | grep -woP 'ddm-lmp-run.+' | xargs -r sudo docker rm -f
 
 echo -e "\033[0;31m**Building the DDM-LMP container image**\033[0m"
-podman build . -t ddm-lmp
+sudo docker build . -t ddm-lmp
 
 echo -e "\033[0;31m**Creating a subnet shared by all DDM-LMP containers**\033[0m"
-if ! podman pod inspect ddm-lmp-pod >/dev/null 2>/dev/null; then
-    podman pod create --name ddm-lmp-pod
+if ! sudo docker network inspect ddm-lmp-net >/dev/null 2>/dev/null; then
+    sudo docker network create --subnet=10.100.0.0/24 ddm-lmp-net
 fi
 
 echo -e "\033[0;31m**Spawning master and slave DDM-LMP containers **\033[0m"
-podman run --pod ddm-lmp-pod -d --name "ddm-lmp-run-master" ddm-lmp master -h localhost
+sudo docker run --net ddm-lmp-net --ip "10.100.0.100" -d --name "ddm-lmp-run-master" ddm-lmp master -h 10.100.0.100
 
 for i in $(seq 1 $N_SLAVES); do
-	port=$(( 2 * $i + 10000 ))
-	podman run --pod ddm-lmp-pod -d --name "ddm-lmp-run-slave$i" ddm-lmp slave -mh localhost -h localhost -p "$port"
+	ip=$(( $i + 100))
+	sudo docker run --net ddm-lmp-net --ip "10.100.0.$ip" -d --name "ddm-lmp-run-slave$i" ddm-lmp slave -mh 10.100.0.100 -h "10.100.0.$ip"
 done
