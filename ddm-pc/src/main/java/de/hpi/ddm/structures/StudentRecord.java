@@ -1,10 +1,12 @@
 package de.hpi.ddm.structures;
 
-import lombok.Value;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 
-@Value
+@Data @NoArgsConstructor @AllArgsConstructor
 public class StudentRecord implements Serializable {
     private static final long serialVersionUID = 3478429357206727140L;
 
