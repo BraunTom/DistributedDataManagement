@@ -50,12 +50,16 @@ public class SHA256Hash {
         return hash;
     }
 
-    public static SHA256Hash fromDataHash(byte[] data, int length) throws DigestException {
+    public static SHA256Hash fromDataHash(byte[] data, int length) {
         SHA256Hash hash = new SHA256Hash();
 
         MessageDigest digest = sha256Hasher.get();
         digest.update(data, 0, length);
-        digest.digest(hash.bytes, 0, SHA256_DIGEST_LENGTH);
+        try {
+            digest.digest(hash.bytes, 0, SHA256_DIGEST_LENGTH);
+        } catch (DigestException e) {
+            throw new IllegalStateException("SHA256 algorithm failed.");
+        }
 
         return hash;
     }
