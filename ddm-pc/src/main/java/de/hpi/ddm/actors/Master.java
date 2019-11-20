@@ -75,6 +75,8 @@ public class Master extends AbstractLoggingActor {
 	private LinkedList<WorkItem> workItems = new LinkedList<>();
 	private LinkedList<ActorRef> idleWorkers = new LinkedList<>();
 
+	private HashSet<Integer> assignedItemsIds = new HashSet<>();
+
 	private long startTime;
 	
 	/////////////////////
@@ -115,16 +117,20 @@ public class Master extends AbstractLoggingActor {
 		// 2. If we process the batches early, we can achieve latency hiding. /////////////////////////////////
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
-		
 		if (message.getRecords().isEmpty()) {
-			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.terminate();
+			if (this.assignedItemsIds.isEmpty()) {
+				this.collector.tell(new Collector.PrintMessage(), this.self());
+				System.out.println("--------terminate--------");
+				this.terminate();
+			}
 			return;
 		}
 
 		for (StudentRecord line : message.getRecords()) {
 			this.workItems.add(new WorkItem(line));
 		}
+
+		System.out.println(this.workItems.size());
 		tryAssignWork();
 
 		// this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
@@ -133,7 +139,13 @@ public class Master extends AbstractLoggingActor {
 
 	private void tryAssignWork() {
 		while (!idleWorkers.isEmpty() && !workItems.isEmpty()) {
-			idleWorkers.remove().tell(this.workItems.removeFirst(), self());
+			WorkItem item = this.workItems.removeFirst();
+			idleWorkers.remove().tell(item, self());
+			this.assignedItemsIds.add(item.record.getId());
+		}
+
+		if (this.workItems.isEmpty()) {
+			this.reader.tell(new Reader.ReadMessage(), self());
 		}
 	}
 	
@@ -152,8 +164,14 @@ public class Master extends AbstractLoggingActor {
 		this.log().info("Algorithm finished in {} ms", executionTime);
 	}
 
-	protected void handle(Worker.RequestWork request) {
+	protected void handle(Worker.RequestWork message) {
 		idleWorkers.add(this.sender());
+
+		if (message.containsResults()) {
+			this.collector.tell(new Collector.CollectMessage(message.getResult()), self());
+			this.assignedItemsIds.remove(message.getId());
+		}
+
 		tryAssignWork();
 	}
 

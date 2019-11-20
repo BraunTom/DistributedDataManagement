@@ -15,6 +15,7 @@ import de.hpi.ddm.algorithms.CombinationCracker;
 import de.hpi.ddm.algorithms.HintPermutationCracker;
 import de.hpi.ddm.structures.SHA256Hash;
 import de.hpi.ddm.structures.StudentRecord;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.apache.commons.lang3.ArrayUtils;
@@ -45,6 +46,17 @@ public class Worker extends AbstractLoggingActor {
 	@Data @NoArgsConstructor
 	public static class RequestWork implements Serializable {
 		private static final long serialVersionUID = -5534456615984629798L;
+		private String result = null;
+		private int id = -1;
+
+		RequestWork(String result, int id) {
+			this.result = result;
+			this.id = id;
+		}
+
+		public boolean containsResults() {
+			return this.result != null;
+		}
 	}
 
 	/////////////////
@@ -149,7 +161,7 @@ public class Worker extends AbstractLoggingActor {
 		log().info("[Worker rid={}] Full password cracked: ({})", record.getId(), fullPassword);
 
 		// Finished, request more work!
-		sender().tell(new RequestWork(), self());
+		sender().tell(new RequestWork(fullPassword, record.getId()), self());
 	}
 
 	private void handle(Master.CanStart canStart) {
