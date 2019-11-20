@@ -144,7 +144,11 @@ public class Worker extends AbstractLoggingActor {
 		log().info("[Worker rid={}] Cracking hint hashes", record.getId());
 
 		Map<SHA256Hash, HintPermutationCracker.CrackedHint> crackedHints =
-				new HintPermutationCracker(record.getPasswordChars()).crack(record.getHintHashes());
+				new HintPermutationCracker(record.getPasswordChars(), null).crack(record.getHintHashes());
+
+		if (crackedHints.size() != record.getHintHashes().length) { // Make sure all hints have been cracked
+			throw new RuntimeException("Not all hint hashes could be cracked!");
+		}
 
 		log().info("[Worker rid={}] All hint hashes cracked ({})", record.getId(),
 				Arrays.toString(crackedHints.values().stream().map(HintPermutationCracker.CrackedHint::getPlainText).toArray(String[]::new)));
