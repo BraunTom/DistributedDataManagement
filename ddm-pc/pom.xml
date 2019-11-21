@@ -20,6 +20,7 @@
 		<fastutil.version>8.2.2</fastutil.version>
 		<opencsv.version>4.1</opencsv.version>
 		<junit.version>4.12</junit.version>
+		<commons-collections.version>4.1</commons-collections.version>
 	</properties>
 
 	<dependencies>
@@ -113,6 +114,12 @@
 			<groupId>com.opencsv</groupId>
 			<artifactId>opencsv</artifactId>
 			<version>${opencsv.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-collections4</artifactId>
+			<version>${commons-collections.version}</version>
 		</dependency>
 
 		<dependency>

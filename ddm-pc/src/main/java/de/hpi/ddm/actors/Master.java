@@ -1,35 +1,31 @@
 package de.hpi.ddm.actors;
 
-import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
-
-import akka.actor.AbstractLoggingActor;
-import akka.actor.ActorRef;
-import akka.actor.PoisonPill;
-import akka.actor.Props;
-import akka.actor.Terminated;
-import de.hpi.ddm.structures.SHA256Hash;
+import akka.actor.*;
 import de.hpi.ddm.structures.StudentRecord;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Master extends AbstractLoggingActor {
 
 	////////////////////////
 	// Actor Construction //
 	////////////////////////
-	
+
 	public static final String DEFAULT_NAME = "master";
 
 	public static Props props(final ActorRef reader, final ActorRef collector) {
 		return Props.create(Master.class, () -> new Master(reader, collector));
 	}
 
-	public Master(final ActorRef reader, final ActorRef collector) {
+	private Master(final ActorRef reader, final ActorRef collector) {
 		this.reader = reader;
 		this.collector = collector;
+		this.workerPool = context().actorOf(WorkerPool.props(), WorkerPool.DEFAULT_NAME);
 		this.workers = new ArrayList<>();
 	}
 
@@ -41,44 +37,36 @@ public class Master extends AbstractLoggingActor {
 	public static class StartMessage implements Serializable {
 		private static final long serialVersionUID = -50374816448627600L;
 	}
-	
+
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class BatchMessage implements Serializable {
+	static class BatchMessage implements Serializable {
 		private static final long serialVersionUID = 8343040942748609598L;
 		private List<StudentRecord> records;
 	}
 
+	@Data
+	static class BatchCompleteMessage implements Serializable {
+		private static final long serialVersionUID = 1235602981358319429L;
+	}
+
 	@Data @NoArgsConstructor
-	public static class RegistrationMessage implements Serializable {
+	static class RegistrationMessage implements Serializable {
 		private static final long serialVersionUID = 3303081601659723997L;
 	}
 
-	@Data @NoArgsConstructor
-	public static class CanStart implements Serializable {
-		private static final long serialVersionUID = -1225459087439901018L;
-	}
-
-	@Data @AllArgsConstructor @NoArgsConstructor
-	public static class WorkItem implements Serializable {
-		private StudentRecord record;
-	}
-
-	
 	/////////////////
 	// Actor State //
 	/////////////////
 
 	private final ActorRef reader;
 	private final ActorRef collector;
+	private final ActorRef workerPool;
 	private final List<ActorRef> workers;
 
-	private LinkedList<WorkItem> workItems = new LinkedList<>();
-	private LinkedList<ActorRef> idleWorkers = new LinkedList<>();
-
-	private HashSet<Integer> assignedItemsIds = new HashSet<>();
+	private ActorRef batchProcessor;
 
 	private long startTime;
-	
+
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
@@ -99,18 +87,18 @@ public class Master extends AbstractLoggingActor {
 				.match(BatchMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
-				.match(Worker.RequestWork.class, this::handle)
+				.match(BatchCompleteMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
-	protected void handle(StartMessage message) {
+	private void handle(StartMessage message) {
 		this.startTime = System.currentTimeMillis();
-		
+
 		this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
-	
-	protected void handle(BatchMessage message) {
+
+	private void handle(BatchMessage message) {
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		// The input file is read in batches for two reasons: /////////////////////////////////////////////////
 		// 1. If we distribute the batches early, we might not need to hold the entire input data in memory. //
@@ -118,40 +106,36 @@ public class Master extends AbstractLoggingActor {
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		if (message.getRecords().isEmpty()) {
-			if (this.assignedItemsIds.isEmpty()) {
-				this.collector.tell(new Collector.PrintMessage(), this.self());
-				System.out.println("--------terminate--------");
-				this.terminate();
-			}
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			System.out.println("--------terminate--------");
+			this.terminate();
 			return;
 		}
 
-		for (StudentRecord line : message.getRecords()) {
-			this.workItems.add(new WorkItem(line));
-		}
-
-		System.out.println(this.workItems.size());
-		tryAssignWork();
+		// Create a new batch processor and forward the batch to it
+		this.batchProcessor = context().actorOf(BatchProcessor.props(collector, workerPool));
+		this.batchProcessor.tell(message, self());
 
 		// this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 		// this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
 
-	private void tryAssignWork() {
-		while (!idleWorkers.isEmpty() && !workItems.isEmpty()) {
-			WorkItem item = this.workItems.removeFirst();
-			idleWorkers.remove().tell(item, self());
-			this.assignedItemsIds.add(item.record.getId());
-		}
+	private void handle(BatchCompleteMessage message) {
+		// Kill the batch processor that handled the current batch (we will create a new one)
+		this.batchProcessor.tell(PoisonPill.getInstance(), ActorRef.noSender());
+		this.batchProcessor = null;
 
-		if (this.workItems.isEmpty()) {
-			this.reader.tell(new Reader.ReadMessage(), self());
-		}
+		// Request more work from the reader
+		this.reader.tell(new Reader.ReadMessage(), self());
 	}
-	
-	protected void terminate() {
+
+	private void terminate() {
 		this.reader.tell(PoisonPill.getInstance(), ActorRef.noSender());
 		this.collector.tell(PoisonPill.getInstance(), ActorRef.noSender());
+		this.workerPool.tell(PoisonPill.getInstance(), ActorRef.noSender());
+		if (this.batchProcessor != null) {
+			this.batchProcessor.tell(PoisonPill.getInstance(), ActorRef.noSender());
+		}
 		
 		for (ActorRef worker : this.workers) {
 			this.context().unwatch(worker);
@@ -164,29 +148,18 @@ public class Master extends AbstractLoggingActor {
 		this.log().info("Algorithm finished in {} ms", executionTime);
 	}
 
-	protected void handle(Worker.RequestWork message) {
-		idleWorkers.add(this.sender());
-
-		if (message.containsResults()) {
-			this.collector.tell(new Collector.CollectMessage(message.getResult()), self());
-			this.assignedItemsIds.remove(message.getId());
-		}
-
-		tryAssignWork();
-	}
-
-	protected void handle(RegistrationMessage message) {
+	private void handle(RegistrationMessage message) {
 		this.context().watch(this.sender());
 		this.workers.add(this.sender());
 
-		this.sender().tell(new CanStart(), self());
+		workerPool.tell(new WorkerPool.NotifyWorkerAvailableMessage(sender()), self());
 
-//		this.log().info("Registered {}", this.sender());
+		this.log().info("Registered {}", this.sender());
 	}
 	
-	protected void handle(Terminated message) {
+	private void handle(Terminated message) {
 		this.context().unwatch(message.getActor());
 		this.workers.remove(message.getActor());
-//		this.log().info("Unregistered {}", message.getActor());
+		this.log().info("Unregistered {}", message.getActor());
 	}
 }

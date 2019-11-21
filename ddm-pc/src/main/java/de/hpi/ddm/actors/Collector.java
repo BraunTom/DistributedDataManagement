@@ -27,13 +27,13 @@ public class Collector extends AbstractLoggingActor {
 	////////////////////
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CollectMessage implements Serializable {
+	static class CollectMessage implements Serializable {
 		private static final long serialVersionUID = -102767440935270949L;
 		private String result;
 	}
 
 	@Data
-	public static class PrintMessage implements Serializable {
+	static class PrintMessage implements Serializable {
 		private static final long serialVersionUID = -267778464637901383L;
 	}
 	
@@ -65,11 +65,11 @@ public class Collector extends AbstractLoggingActor {
 				.build();
 	}
 
-	protected void handle(CollectMessage message) {
+	private void handle(CollectMessage message) {
 		this.results.add(message.getResult());
 	}
 	
-	protected void handle(PrintMessage message) {
+	private void handle(PrintMessage message) {
 		this.results.forEach(result -> this.log().info("{}", result));
 	}
 }

@@ -25,7 +25,7 @@ public class Reaper extends AbstractLoggingActor {
 		return Props.create(Reaper.class);
 	}
 
-	public static void watchWithDefaultReaper(AbstractActor actor) {
+	static void watchWithDefaultReaper(AbstractActor actor) {
 		ActorSelection defaultReaper = actor.getContext().getSystem().actorSelection("/user/" + DEFAULT_NAME);
 		defaultReaper.tell(new WatchMeMessage(), actor.getSelf());
 	}
@@ -35,7 +35,7 @@ public class Reaper extends AbstractLoggingActor {
 	////////////////////
 	
 	@Data @NoArgsConstructor
-	public static class WatchMeMessage implements Serializable {
+	private static class WatchMeMessage implements Serializable {
 		private static final long serialVersionUID = -5201749681392553264L;
 	}
 	

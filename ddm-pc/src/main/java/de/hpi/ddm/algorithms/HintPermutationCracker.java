@@ -1,23 +1,19 @@
 package de.hpi.ddm.algorithms;
 
 import de.hpi.ddm.structures.SHA256Hash;
-import lombok.AllArgsConstructor;
-import lombok.Value;
 import org.apache.commons.lang3.ArrayUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
+/**
+ * Cracks a set of hints given their SHA256 hash, by a permutation algorithm of a given character set.
+ */
 public class HintPermutationCracker {
     private final byte[] choices;
     private final byte[] prefix;
-
-    @Value  @AllArgsConstructor
-    public static class CrackedHint {
-        String plainText;
-        char missingCharacter;
-    }
 
     public HintPermutationCracker(String choices, String prefix) {
         if (choices == null || choices.length() == 0)
@@ -55,28 +51,32 @@ public class HintPermutationCracker {
      * Checks if the SHA256 hash of the given permutation matches some of the hints to crack,
      * and if so, stores the cracked hint information (plain text and missing character) in the map.
      * @param candidate The permutation corresponding to the hint.
-     * @param hintsToCrack Map of hint SHA256 hashes to cracked hint information.
+     * @param hintHashes Set of hint SHA256 hashes that we are trying to crack.
+     * @param crackedHints Map of cracked hint SHA256 hashes to character missing from the hint.
      */
-    private static void tryCrackPasswordHint(byte[] candidate, Map<SHA256Hash, CrackedHint> hintsToCrack) {
+    private static void tryCrackPasswordHint(byte[] candidate, Set<SHA256Hash> hintHashes, Map<SHA256Hash, Character> crackedHints) {
         // Ignore the last character of the permutation (since it is not in the hint, just used for the permutations!)
         // In fact, note that in case of a match, this last character will be the character missing in the hint
         SHA256Hash candidateHash = SHA256Hash.fromDataHash(candidate, candidate.length - 1);
 
-        if (hintsToCrack.containsKey(candidateHash)) {
+        if (hintHashes.contains(candidateHash)) {
             // Save the cracked hint plain text
-            hintsToCrack.replace(candidateHash, new CrackedHint(
-                    new String(candidate, 0, candidate.length - 1, StandardCharsets.UTF_8),
-                    (char) candidate[candidate.length - 1]
-            ));
+            crackedHints.put(candidateHash, (char) candidate[candidate.length - 1]);
         }
     }
 
     /**
-     * Tries to crack (simultaneously) all the hint SHA256 hashes in the map by running a brute force search
-     * over the permutations of the password characters.
-     * @param hintsToCrack Map of hint SHA256 hashes to cracked hint information. The value will be filled on hash match.
+     * Cracks all the hint hashes in the given array using this instance's hint permutation cracker configuration.
+     * @param hintHashes Array of hint hashes to crack.
+     * @return A map containing the hint hashes as the key and the character missing in the hint as the value.
+     *         (NOTE: possibly not all hints could be cracked, in this case, the hint hash will not be in the map!)
      */
-    private void bruteForcePermutations(Map<SHA256Hash, CrackedHint> hintsToCrack) {
+    public Map<SHA256Hash, Character> crack(Set<SHA256Hash> hintHashes) {
+        if (hintHashes == null)
+            throw new IllegalArgumentException("HintPermutationCracker: 'hintHashes' must be a non-null array.");
+
+        Map<SHA256Hash, Character> crackedHints = new HashMap<>();
+
         // Initialize the state of the "Countdown QuickPerm Algorithm" (see getNextPermutation for more information)
         int[] p = new int[choices.length + 1];
         for (int k = 0; k < p.length; k++)
@@ -86,32 +86,13 @@ public class HintPermutationCracker {
 
         // Iterate over all permutations and repeatedly check if they match the corresponding hint hashes
         int k = 1;
-        tryCrackPasswordHint(permutation, hintsToCrack);
+        tryCrackPasswordHint(permutation, hintHashes, crackedHints);
 
         while ((k = getNextPermutation(permutation, prefix.length, p, k)) != choices.length) {
-            tryCrackPasswordHint(permutation, hintsToCrack);
+            tryCrackPasswordHint(permutation, hintHashes, crackedHints);
         }
 
-        tryCrackPasswordHint(permutation, hintsToCrack);
-    }
-
-    /**
-     * Cracks all the hint hashes in the given array using this instance's hint permutation cracker configuration.
-     * @param hintHashes Array of hint hashes to crack.
-     * @return A map containing the hint hashes as the key and the cracked hint details as the value.
-     *         (NOTE: possibly not all hints could be cracked, in this case, the value in the map will be null!)
-     */
-    public Map<SHA256Hash, CrackedHint> crack(SHA256Hash[] hintHashes) {
-        if (hintHashes == null)
-            throw new IllegalArgumentException("HintPermutationCracker: 'hintHashes' must be a non-null array.");
-
-        // Put the hint hashes in a map which will allow efficient membership checking
-        Map<SHA256Hash, CrackedHint> crackedHints = new HashMap<>();
-        for (SHA256Hash hintHash : hintHashes) {
-            crackedHints.put(hintHash, null);
-        }
-
-        bruteForcePermutations(crackedHints);
+        tryCrackPasswordHint(permutation, hintHashes, crackedHints);
 
         return crackedHints;
     }

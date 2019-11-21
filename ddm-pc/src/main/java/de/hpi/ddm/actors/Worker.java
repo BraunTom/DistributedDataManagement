@@ -14,14 +14,13 @@ import de.hpi.ddm.MasterSystem;
 import de.hpi.ddm.algorithms.CombinationCracker;
 import de.hpi.ddm.algorithms.HintPermutationCracker;
 import de.hpi.ddm.structures.SHA256Hash;
-import de.hpi.ddm.structures.StudentRecord;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.apache.commons.lang3.ArrayUtils;
 
 import java.io.Serializable;
-import java.util.*;
+import java.util.Map;
+import java.util.Set;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -43,20 +42,35 @@ public class Worker extends AbstractLoggingActor {
 	// Actor Messages //
 	////////////////////
 
-	@Data @NoArgsConstructor
-	public static class RequestWork implements Serializable {
-		private static final long serialVersionUID = -5534456615984629798L;
-		private String result = null;
-		private int id = -1;
+	@Data @AllArgsConstructor @NoArgsConstructor
+	static class CrackHintsBatchWorkItem implements Serializable {
+		private static final long serialVersionUID = -416499721297254929L;
 
-		RequestWork(String result, int id) {
-			this.result = result;
-			this.id = id;
-		}
+		private Set<SHA256Hash> hintHashes;
+		private String prefix;
+		private String choices;
+	}
 
-		public boolean containsResults() {
-			return this.result != null;
-		}
+	@Data @AllArgsConstructor @NoArgsConstructor
+	static class CrackFullPasswordWorkItem implements Serializable {
+		private static final long serialVersionUID = -7708112313610425523L;
+
+		private SHA256Hash fullPasswordHash;
+		private String fullPasswordChars;
+		private int fullPasswordLength;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	static class CrackedHintsMessage implements Serializable {
+		private static final long serialVersionUID = 206938995923980746L;
+		private Map<SHA256Hash, Character> crackedHints;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	static class CrackedFullPasswordMessage implements Serializable {
+		private static final long serialVersionUID = -4803956548142547242L;
+		private SHA256Hash fullPasswordHash;
+		private String fullPassword;
 	}
 
 	/////////////////
@@ -92,8 +106,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(Master.WorkItem.class, this::handle)
-				.match(Master.CanStart.class, this::handle)
+				.match(Worker.CrackHintsBatchWorkItem.class, this::handle)
+				.match(Worker.CrackFullPasswordWorkItem.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -124,51 +138,30 @@ public class Worker extends AbstractLoggingActor {
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
 
-	private String findUncommonCharacters(String passwordCharacters, Character[] hintCharacters) throws Exception {
-		Set<Character> match = new HashSet<>();
-		for (char c : passwordCharacters.toCharArray()) {
-			match.add(c);
-		}
-		for (char c : hintCharacters) {
-		    match.remove(c);
-		}
-		return String.valueOf(ArrayUtils.toPrimitive(match.toArray(new Character[0])));
+	private void handle(Worker.CrackHintsBatchWorkItem workItem) {
+		log().info("[Worker] Trying to crack {} hint hashes, starting with choices {} and prefix {}",
+				workItem.getHintHashes().size(), workItem.getChoices(), workItem.getPrefix());
+
+		// Crack the hints in this range
+		Map<SHA256Hash, Character> crackedHints =
+				new HintPermutationCracker(workItem.getChoices(), workItem.getPrefix()).crack(workItem.getHintHashes());
+
+		log().info("[Worker] Cracked {} hint hashes, starting with choices {} and prefix {}",
+				crackedHints.size(), workItem.getChoices(), workItem.getPrefix());
+
+		// Send back the result (implicitly also asks for more work)
+		sender().tell(new CrackedHintsMessage(crackedHints), self());
 	}
 
-	private void handle(Master.WorkItem workItem) throws Exception {
-		StudentRecord record = workItem.getRecord();
-
-		log().info("[Worker rid={}] Received new WorkItem", record.getId());
-
-		// Crack the hint hashes
-		log().info("[Worker rid={}] Cracking hint hashes", record.getId());
-
-		Map<SHA256Hash, HintPermutationCracker.CrackedHint> crackedHints =
-				new HintPermutationCracker(record.getPasswordChars(), null).crack(record.getHintHashes());
-
-		if (crackedHints.size() != record.getHintHashes().length) { // Make sure all hints have been cracked
-			throw new RuntimeException("Not all hint hashes could be cracked!");
-		}
-
-		log().info("[Worker rid={}] All hint hashes cracked ({})", record.getId(),
-				Arrays.toString(crackedHints.values().stream().map(HintPermutationCracker.CrackedHint::getPlainText).toArray(String[]::new)));
-
-		// Figure out the characters that can be in the password
-		String fullPasswordCharacters = findUncommonCharacters(record.getPasswordChars(),
-                crackedHints.values().stream().map(HintPermutationCracker.CrackedHint::getMissingCharacter).toArray(Character[]::new));
-
-		log().info("[Worker rid={}] Possible characters for the full password are: ({})", record.getId(), fullPasswordCharacters);
+	private void handle(Worker.CrackFullPasswordWorkItem message) {
+		log().info("[Worker] Possible characters for the full password are: ({})", message.getFullPasswordChars());
 
 		// Crack the full password
-		String fullPassword = new CombinationCracker(fullPasswordCharacters, record.getPasswordLength()).crack(record.getFullPasswordHash());
+		String fullPassword = new CombinationCracker(message.getFullPasswordChars(), message.getFullPasswordLength()).crack(message.getFullPasswordHash());
 
-		log().info("[Worker rid={}] Full password cracked: ({})", record.getId(), fullPassword);
+		log().info("[Worker] Full password cracked: ({})", fullPassword);
 
-		// Finished, request more work!
-		sender().tell(new RequestWork(fullPassword, record.getId()), self());
-	}
-
-	private void handle(Master.CanStart canStart) {
-		sender().tell(new RequestWork(), self());
+		// Send back the result (implicitly also asks for more work)
+		sender().tell(new CrackedFullPasswordMessage(message.getFullPasswordHash(), fullPassword), self());
 	}
 }

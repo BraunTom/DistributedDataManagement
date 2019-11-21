@@ -31,7 +31,7 @@ public class Reader extends AbstractLoggingActor {
 	////////////////////
 
 	@Data
-	public static class ReadMessage implements Serializable {
+	static class ReadMessage implements Serializable {
 		private static final long serialVersionUID = -3254147511955012292L;
 	}
 	

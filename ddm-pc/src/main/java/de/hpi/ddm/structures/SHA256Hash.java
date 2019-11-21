@@ -5,6 +5,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
+/**
+ * SHA256 HASH CLASS (with hex <-> byte array conversion, hash / comparison operators for later use).
+ */
 public class SHA256Hash {
     private static final int SHA256_DIGEST_LENGTH = 32;
     private byte[] bytes = new byte[SHA256_DIGEST_LENGTH];
