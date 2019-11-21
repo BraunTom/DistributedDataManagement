@@ -103,14 +103,15 @@ public class Master extends AbstractLoggingActor {
 		// The input file is read in batches for two reasons: /////////////////////////////////////////////////
 		// 1. If we distribute the batches early, we might not need to hold the entire input data in memory. //
 		// 2. If we process the batches early, we can achieve latency hiding. /////////////////////////////////
-		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		if (message.getRecords().isEmpty()) {
+			this.log().info("[Master] Empty batch received (end of program), starting shutdown");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
-			System.out.println("--------terminate--------");
 			this.terminate();
 			return;
 		}
+
+		this.log().info("[Master] Starting a new batch processor");
 
 		// Create a new batch processor and forward the batch to it
 		this.batchProcessor = context().actorOf(BatchProcessor.props(collector, workerPool));
@@ -121,6 +122,8 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	private void handle(BatchCompleteMessage message) {
+		this.log().info("[Master] Current batch completed, trying to read a new batch");
+
 		// Kill the batch processor that handled the current batch (we will create a new one)
 		this.batchProcessor.tell(PoisonPill.getInstance(), ActorRef.noSender());
 		this.batchProcessor = null;
