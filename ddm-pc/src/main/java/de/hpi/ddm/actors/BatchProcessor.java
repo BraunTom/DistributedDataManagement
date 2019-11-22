@@ -8,7 +8,6 @@ import de.hpi.ddm.structures.StudentRecord;
 import lombok.Data;
 import org.apache.commons.collections4.MultiValuedMap;
 import org.apache.commons.collections4.multimap.HashSetValuedHashMap;
-import org.apache.commons.lang3.ArrayUtils;
 
 import java.util.Arrays;
 import java.util.HashSet;
@@ -55,8 +54,9 @@ public class BatchProcessor extends AbstractLoggingActor {
 
         StudentCrackingWorkLog(StudentRecord record) {
             this.record = record;
-            this.potentialPasswordCharacters = new HashSet<>(Arrays.asList(
-                    ArrayUtils.toObject(record.getPasswordChars().toCharArray())));
+            this.potentialPasswordCharacters = new HashSet<>();
+            for (int i = 0; i < record.getPasswordChars().length(); i++)
+                this.potentialPasswordCharacters.add(record.getPasswordChars().charAt(i));
             this.hintsRemainingToCrack = record.getHintHashes().length;
         }
     }

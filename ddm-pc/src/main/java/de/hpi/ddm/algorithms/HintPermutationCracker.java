@@ -1,7 +1,6 @@
 package de.hpi.ddm.algorithms;
 
 import de.hpi.ddm.structures.SHA256Hash;
-import org.apache.commons.lang3.ArrayUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -82,7 +81,9 @@ public class HintPermutationCracker {
         for (int k = 0; k < p.length; k++)
             p[k] = k;
 
-        byte[] permutation = ArrayUtils.addAll(prefix, choices);
+        byte[] permutation = new byte[prefix.length + choices.length];
+        System.arraycopy(prefix, 0, permutation, 0, prefix.length);
+        System.arraycopy(choices, 0, permutation, prefix.length, choices.length);
 
         // Iterate over all permutations and repeatedly check if they match the corresponding hint hashes
         int k = 1;
