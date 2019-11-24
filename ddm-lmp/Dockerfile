@@ -11,5 +11,6 @@ COPY src /build/src/
 RUN mvn package
 
 FROM openjdk:8-alpine
-COPY --from=builder /build/target/ddm-lmp-1.0.jar /root
-ENTRYPOINT ["java", "-jar", "/root/ddm-lmp-1.0.jar"]
+WORKDIR /root
+COPY --from=builder /build/target/ddm-lmp-1.0.jar .
+ENTRYPOINT ["java", "-jar", "ddm-lmp-1.0.jar"]

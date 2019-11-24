@@ -1,10 +1,5 @@
 package de.hpi.ddm.actors;
 
-import java.io.UnsupportedEncodingException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.List;
-
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.PoisonPill;
@@ -16,6 +11,16 @@ import akka.cluster.ClusterEvent.MemberUp;
 import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
+import de.hpi.ddm.algorithms.CombinationCracker;
+import de.hpi.ddm.algorithms.HintPermutationCracker;
+import de.hpi.ddm.structures.SHA256Hash;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.io.Serializable;
+import java.util.Map;
+import java.util.Set;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -36,6 +41,37 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////
 	// Actor Messages //
 	////////////////////
+
+	@Data @AllArgsConstructor @NoArgsConstructor
+	static class CrackHintsBatchWorkItem implements Serializable {
+		private static final long serialVersionUID = -416499721297254929L;
+
+		private Set<SHA256Hash> hintHashes;
+		private String prefix;
+		private String choices;
+	}
+
+	@Data @AllArgsConstructor @NoArgsConstructor
+	static class CrackFullPasswordWorkItem implements Serializable {
+		private static final long serialVersionUID = -7708112313610425523L;
+
+		private SHA256Hash fullPasswordHash;
+		private String fullPasswordChars;
+		private int fullPasswordLength;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	static class CrackedHintsMessage implements Serializable {
+		private static final long serialVersionUID = 206938995923980746L;
+		private Map<SHA256Hash, Character> crackedHints;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	static class CrackedFullPasswordMessage implements Serializable {
+		private static final long serialVersionUID = -4803956548142547242L;
+		private SHA256Hash fullPasswordHash;
+		private String fullPassword;
+	}
 
 	/////////////////
 	// Actor State //
@@ -70,6 +106,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
+				.match(Worker.CrackHintsBatchWorkItem.class, this::handle)
+				.match(Worker.CrackFullPasswordWorkItem.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -99,47 +137,31 @@ public class Worker extends AbstractLoggingActor {
 		if (this.masterSystem.equals(message.member()))
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
-	
-	private String hash(String line) {
-		try {
-			MessageDigest digest = MessageDigest.getInstance("SHA-256");
-			byte[] hashedBytes = digest.digest(String.valueOf(line).getBytes("UTF-8"));
-			
-			StringBuffer stringBuffer = new StringBuffer();
-			for (int i = 0; i < hashedBytes.length; i++) {
-				stringBuffer.append(Integer.toString((hashedBytes[i] & 0xff) + 0x100, 16).substring(1));
-			}
-			return stringBuffer.toString();
-		}
-		catch (NoSuchAlgorithmException | UnsupportedEncodingException e) {
-			throw new RuntimeException(e.getMessage());
-		}
+
+	private void handle(Worker.CrackHintsBatchWorkItem workItem) {
+		log().info("[Worker] Trying to crack {} hint hashes, starting with choices {} and prefix {}",
+				workItem.getHintHashes().size(), workItem.getChoices(), workItem.getPrefix());
+
+		// Crack the hints in this range
+		Map<SHA256Hash, Character> crackedHints =
+				new HintPermutationCracker(workItem.getChoices(), workItem.getPrefix()).crack(workItem.getHintHashes());
+
+		log().info("[Worker] Cracked {} hint hashes, starting with choices {} and prefix {}",
+				crackedHints.size(), workItem.getChoices(), workItem.getPrefix());
+
+		// Send back the result (implicitly also asks for more work)
+		sender().tell(new CrackedHintsMessage(crackedHints), self());
 	}
-	
-	// Generating all permutations of an array using Heap's Algorithm
-	// https://en.wikipedia.org/wiki/Heap's_algorithm
-	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/
-	private void heapPermutation(char[] a, int size, int n, List<String> l) {
-		// If size is 1, store the obtained permutation
-		if (size == 1)
-			l.add(new String(a));
 
-		for (int i = 0; i < size; i++) {
-			heapPermutation(a, size - 1, n, l);
+	private void handle(Worker.CrackFullPasswordWorkItem message) {
+		log().info("[Worker] Possible characters for the full password are: ({})", message.getFullPasswordChars());
 
-			// If size is odd, swap first and last element
-			if (size % 2 == 1) {
-				char temp = a[0];
-				a[0] = a[size - 1];
-				a[size - 1] = temp;
-			}
+		// Crack the full password
+		String fullPassword = new CombinationCracker(message.getFullPasswordChars(), message.getFullPasswordLength()).crack(message.getFullPasswordHash());
 
-			// If size is even, swap i-th and last element
-			else {
-				char temp = a[i];
-				a[i] = a[size - 1];
-				a[size - 1] = temp;
-			}
-		}
+		log().info("[Worker] Full password cracked: ({})", fullPassword);
+
+		// Send back the result (implicitly also asks for more work)
+		sender().tell(new CrackedFullPasswordMessage(message.getFullPasswordHash(), fullPassword), self());
 	}
 }
