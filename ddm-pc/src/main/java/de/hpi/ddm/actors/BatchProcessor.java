@@ -66,6 +66,8 @@ public class BatchProcessor extends AbstractLoggingActor {
     private MultiValuedMap<SHA256Hash, StudentCrackingWorkLog> hintHashToRegistry;
     private MultiValuedMap<SHA256Hash, StudentCrackingWorkLog> fullPasswordHashToRegistry;
 
+    private int pendingHintMessages;
+
     /////////////////////
     // Actor Lifecycle //
     /////////////////////
@@ -133,11 +135,15 @@ public class BatchProcessor extends AbstractLoggingActor {
                 }
             }
         }
+
+        pendingHintMessages = passwordChars.length() * (passwordChars.length() - 1);
     }
 
     private void handle(Worker.CrackedHintsMessage message) {
         // Tell the worker pool that this worker can now pull more work
         workerPool.tell(new WorkerPool.NotifyWorkerAvailableMessage(sender()), self());
+
+        pendingHintMessages--;
 
         log().info("[BatchProcessor] Aggregating {} cracked hints", message.getCrackedHints().size());
 
@@ -162,6 +168,10 @@ public class BatchProcessor extends AbstractLoggingActor {
                 }
             }
         }
+
+        if (fullPasswordHashToRegistry.isEmpty() && pendingHintMessages == 0) {
+            context().parent().tell(new Master.BatchCompleteMessage(), self());
+        }
     }
 
     private void handle(Worker.CrackedFullPasswordMessage message) {
@@ -180,7 +190,7 @@ public class BatchProcessor extends AbstractLoggingActor {
         }
 
         // When all password have been cracked, tell the Master that the batch is finished
-        if (fullPasswordHashToRegistry.isEmpty()) {
+        if (fullPasswordHashToRegistry.isEmpty() && pendingHintMessages == 0) {
             context().parent().tell(new Master.BatchCompleteMessage(), self());
         }
     }
