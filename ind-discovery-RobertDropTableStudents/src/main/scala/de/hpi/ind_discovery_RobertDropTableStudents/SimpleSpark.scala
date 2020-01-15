@@ -1,4 +1,4 @@
-package de.hpi.spark_tutorial
+package de.hpi.ind_discovery_RobertDropTableStudents
 
 import org.apache.spark.sql.{Dataset, Encoder, SparkSession}
 import org.apache.spark.ml.Pipeline

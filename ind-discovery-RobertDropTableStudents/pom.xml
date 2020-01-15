@@ -1,11 +1,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>de.hpi.spark_tutorial</groupId>
-  <artifactId>SparkTutorial</artifactId>
+  <groupId>de.hpi.ind_discovery_RobertDropTableStudents</groupId>
+  <artifactId>ind_discovery_RobertDropTableStudents</artifactId>
   <version>1.0</version>
   <name>${project.artifactId}</name>
-  <description>A spark tutorial project</description>
+  <description>IND Discovery - RobertDropTableStudents group</description>
   <inceptionYear>2018</inceptionYear>
   <packaging>jar</packaging>
 
@@ -93,7 +93,7 @@
               </filters>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                  <mainClass>de.hpi.spark_tutorial.SimpleSpark</mainClass>
+                  <mainClass>de.hpi.ind_discovery_RobertDropTableStudents.SimpleSpark</mainClass>
                 </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
               </transformers>
