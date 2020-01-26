@@ -28,11 +28,27 @@ object SimpleSpark extends App {
     // Setting up a Spark Session
     //------------------------------------------------------------------------------------------------------------------
 
+    var path = "TPCH/"
+    var cores = "4"
+
+    for (
+      i <- args.indices
+      if i % 2 == 0
+    ) {
+      args(i) match {
+        case "--cores" => cores = args(i+1)
+        case "--path" => path = args(i+1)
+      }
+    }
+
+    println(path)
+    println(cores)
+
     // Create a SparkSession to work with Spark
     val sparkBuilder = SparkSession
       .builder()
       .appName("SparkTutorial")
-      .master("local[4]") // local, with 4 worker cores
+      .master(s"local[$cores]") // local, with 4 worker cores
     val spark = sparkBuilder.getOrCreate()
 
     // Set the default number of shuffle partitions (default is 200, which is too high for local deployment)
@@ -45,7 +61,7 @@ object SimpleSpark extends App {
     //------------------------------------------------------------------------------------------------------------------
 
     val inputs = List("region", "nation", "supplier", "customer", "part", "lineitem", "orders")
-      .map(name => s"data/TPCH/tpch_$name.csv")
+      .map(name => s"$path/tpch_$name.csv")
 
     def time[R](block: => R): R = {
       val t0 = System.currentTimeMillis()
