@@ -49,13 +49,14 @@ object Main extends App {
 
     val inputPathFiles = new File(path).listFiles
     if (inputPathFiles == null) {
-      println("The input files were not found.")
-      println(s"The files must reside in the $path directory relative to the JAR.")
+      println("The input path was not found.")
+      println(s"The files must reside in the '$path' directory relative to the JAR.")
       sys.exit(1)
     }
     val inputCsvFileNames = inputPathFiles.map(_.getPath).filter(_.endsWith(".csv")).toList
     if (inputCsvFileNames.isEmpty) {
-      println("No input CSV files were found. Please check the specified path.")
+      println("The input path was found, but no input CSV files were found there.")
+      println("Make sure you have copied the correct files (e.g. TPCH dataset) there.")
       sys.exit(1)
     }
 
