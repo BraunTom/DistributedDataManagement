@@ -1,5 +1,7 @@
 package de.hpi.ind_discovery_RobertDropTableStudents
 
+import java.io.File
+
 import org.apache.spark.sql.SparkSession
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
@@ -7,6 +9,19 @@ import org.apache.log4j.Level
 object Main extends App {
 
   override def main(args: Array[String]): Unit = {
+    var path = "TPCH/"
+    var cores = 4
+
+    for (
+      i <- args.indices
+      if i % 2 == 0
+    ) {
+      args(i) match {
+        case "--cores" => cores = args(i+1).toInt
+        case "--path" => path = args(i+1)
+      }
+    }
+
     // Turn off logging
     Logger.getLogger("org").setLevel(Level.OFF)
     Logger.getLogger("akka").setLevel(Level.OFF)
@@ -15,31 +30,16 @@ object Main extends App {
     // Setting up a Spark Session
     //------------------------------------------------------------------------------------------------------------------
 
-    var path = "TPCH/"
-    var cores = "4"
-
-    for (
-      i <- args.indices
-      if i % 2 == 0
-    ) {
-      args(i) match {
-        case "--cores" => cores = args(i+1)
-        case "--path" => path = args(i+1)
-      }
-    }
-
-    println(path)
-    println(cores)
-
     // Create a SparkSession to work with Spark
     val sparkBuilder = SparkSession
       .builder()
-      .appName("SparkTutorial")
-      .master(s"local[$cores]") // local, with 4 worker cores
+      .appName("INDDiscoveryRobertDropTableStudents")
+      .master(s"local[$cores]") // local, with as many worker cores as specified
     val spark = sparkBuilder.getOrCreate()
 
-    // Set the default number of shuffle partitions (default is 200, which is too high for local deployment)
-    spark.conf.set("spark.sql.shuffle.partitions", "8") //
+    // Set the default number of shuffle partitions
+    // See https://stackoverflow.com/a/45704560
+    spark.conf.set("spark.sql.shuffle.partitions", (2*cores).toString)
 
     println("---------------------------------------------------------------------------------------------------------")
 
@@ -47,8 +47,12 @@ object Main extends App {
     // Inclusion Dependency Discovery (Homework)
     //------------------------------------------------------------------------------------------------------------------
 
-    val inputs = List("region", "nation", "supplier", "customer", "part", "lineitem", "orders")
-      .map(name => s"$path/tpch_$name.csv")
+    val inputPathFiles = new File(path).listFiles
+    if (inputPathFiles == null) {
+      println("Data directory not found")
+      sys.exit(1)
+    }
+    val inputCsvFileNames = inputPathFiles.map(_.getPath).filter(_.endsWith(".csv")).toList
 
     def time[R](block: => R): R = {
       val t0 = System.currentTimeMillis()
@@ -58,6 +62,6 @@ object Main extends App {
       result
     }
 
-    time {Sindy.discoverINDs(inputs, spark)}
+    time {Sindy.discoverINDs(inputCsvFileNames, spark)}
   }
 }

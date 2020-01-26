@@ -2,13 +2,14 @@ package de.hpi.ind_discovery_RobertDropTableStudents
 
 import org.apache.spark.sql.SparkSession
 
+
 object Sindy {
 
   def discoverINDs(inputs: List[String], spark: SparkSession): Unit = {
     import spark.implicits._
 
-    val tpchFlattenedTables = inputs.map(inputName => {
-      // Load the CSV file corresponding to each TPCH table into an RDD
+    val cellsByTable = inputs.map(inputName => {
+      // Load the CSV file corresponding to each table into an RDD
       val table = spark
         .read
         .option("inferSchema", "false")
@@ -16,7 +17,6 @@ object Sindy {
         .option("quote", "\"")
         .option("delimiter", ";")
         .csv(inputName)
-        .toDF()
 
       // "Flatten" the table so each cell is converted to a row along with its corresponding column name
       // E.g. Before:
@@ -35,12 +35,12 @@ object Sindy {
       // | 3     | COLA |
       // | 4     | COLB |
       // |--------------|
-      val columns = table.columns // TODO: Should broadcast?
-      table.flatMap(r => (0 until r.length).map(i => r.getString(i)).zip(columns))
+      val columns = table.columns // NB: Broadcast doesn't seem worthwhile
+      table.flatMap(r => (0 until r.length).map(i => (r.getString(i), columns(i)))).distinct()
     })
 
-    // Concatenate all "flattened" tables of TPCH together
-    val tpchTuples = tpchFlattenedTables.reduce((a,b) => a.union(b))
+    // Concatenate all "flattened" tables (cells) together
+    val allCells = cellsByTable.reduce((a,b) => a.union(b))
 
     // Calculate attribute sets: For each value, create a set containing the names of all the
     // tables it appears in (after this step, the values are not longer important and are dropped)
@@ -66,8 +66,8 @@ object Sindy {
     // | COLC           |
     // | COLC           |
     // |----------------|
-    val attributeSets = tpchTuples.groupByKey { case (value, _) => value }
-      .mapGroups { case (_, iterator) => iterator.map(x => x._2).toSet }
+    val attributeSets = allCells.groupByKey { case (value, _) => value }
+      .mapGroups { case (_, iterator) => iterator.map(x => x._2).toSet }.distinct()
 
     // Calculate inclusion lists: For each attribute set,
     // create a tuple (value, attribute set - value)
@@ -92,7 +92,7 @@ object Sindy {
     // | COLC  | (Empty)   |
     // | COLC  | (Empty)   |
     // |-------------------|
-    val inclusionLists = attributeSets.flatMap(r => r.map(v => (v, r - v)))
+    val inclusionLists = attributeSets.flatMap(r => r.map(v => (v, r - v))).distinct()
 
     // Calculate INDs: Group all inclusion lists by key, and intersect
     // their corresponding column sets all together. Those are the INDs
