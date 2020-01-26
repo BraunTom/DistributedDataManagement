@@ -49,10 +49,15 @@ object Main extends App {
 
     val inputPathFiles = new File(path).listFiles
     if (inputPathFiles == null) {
-      println("Data directory not found")
+      println("The input files were not found.")
+      println(s"The files must reside in the $path directory relative to the JAR.")
       sys.exit(1)
     }
     val inputCsvFileNames = inputPathFiles.map(_.getPath).filter(_.endsWith(".csv")).toList
+    if (inputCsvFileNames.isEmpty) {
+      println("No input CSV files were found. Please check the specified path.")
+      sys.exit(1)
+    }
 
     def time[R](block: => R): R = {
       val t0 = System.currentTimeMillis()

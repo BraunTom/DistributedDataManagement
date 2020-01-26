@@ -2,7 +2,7 @@
 
 **Group:** Group: Robert’); DROP TABLE Students;– (Joan Bruguera & Tom Braun)
 
-NOTE: The example TPCH dataset is *not* included in the git repository, and must be copied manually (by default, to the `TPCH` directory).
+NOTE: The example TPCH dataset is *not* included in the git repository, and must be copied manually (by default, to the `TPCH` directory relative to the directory from which the JAR is executed).
 
 # Build instructions
 
